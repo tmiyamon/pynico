@@ -4,6 +4,8 @@
 import mechanize
 import urllib
 import cookielib
+import time
+import re
 
 from lxml import etree
 import collections
@@ -22,12 +24,15 @@ def to_dict(xml):
     return {root.tag: xml_to_item(root)}
 
 
-class NiconicoClient(mechanize.Browser):
+class NiconicoAPIClient(mechanize.Browser):
     URL_GETTHUMBINFO = "http://ext.nicovideo.jp/api/getthumbinfo/%s"
     URL_THUMB = "http://ext.nicovideo.jp/thumb/%s"
     URL_GETFLV = "http://www.nicovideo.jp/api/getflv?v=%s"
     URL_GETRELATION = "http://www.nicovideo.jp/api/getrelation?page=%(page)d&sort=%(sort)s&order=%(order)s&video=%(video)s"
     URL_LOGIN = "https://secure.nicovideo.jp/secure/login_form"
+    URL_MYLIST = "http://www.nicovideo.jp/my/mylist"
+
+    TOKEN_PATTERN = re.compile('NicoAPI\.token \= "(.+)"')
 
     def __init__(self, user_id=None, passwd=None, factory=None, history=None, request_class=None):
         mechanize.Browser.__init__(self, factory, history, request_class)
@@ -59,15 +64,15 @@ class NiconicoClient(mechanize.Browser):
 
 
     def getthumbinfo(self, mov_name):
-        return to_dict(self.open(NiconicoClient.URL_GETTHUMBINFO % mov_name))
+        return to_dict(self.open(NiconicoAPIClient.URL_GETTHUMBINFO % mov_name))
 
     def thumb(self, mov_name):
-        return self.open(NiconicoClient.URL_THUMB % mov_name).read()
+        return self.open(NiconicoAPIClient.URL_THUMB % mov_name).read()
 
     def getflv(self, mov_name):
         self.login()
         self.open("http://www.nicovideo.jp/watch/%s" % mov_name)
-        contents = self.open(NiconicoClient.URL_GETFLV % mov_name)
+        contents = self.open(NiconicoAPIClient.URL_GETFLV % mov_name)
         return dict([map(urllib.unquote, a.split('=')) for a in contents.get_data().split('&')])
 
     def getrelation(self, mov_name, page=1, sort='p', order='d'):
@@ -93,19 +98,33 @@ class NiconicoClient(mechanize.Browser):
             'sort': sort,
             'order': order
         }
-        return to_dict(self.open(NiconicoClient.URL_GETRELATION % params))
+        return to_dict(self.open(NiconicoAPIClient.URL_GETRELATION % params))
 
 
-    def login(self):
-        assert(self.user_id)
-        assert(self.password)
-        self.open(NiconicoClient.URL_LOGIN)
+    def login(self, user_id = None, passwd = None):
+        _user_id = user_id or self.user_id
+        _passwd = passwd or self.passwd
+
+        assert _user_id, "user_id required for login"
+        assert _passwd, "passwd required for login"
+
+        self.open(NiconicoAPIClient.URL_LOGIN)
+        time.sleep(0.5)
+
         self.select_form(nr = 0)
-        self.form["mail"] = self.user_id
-        self.form["password"] = self.passwd
+        self.form["mail"] = _user_id
+        self.form["password"] = _passwd
 
         return self.submit()
 
+    def gettoken(self):
+        self.login()
+
+        input = self.open('http://www.nicovideo.jp/my/mylist')
+        for line in input:
+            m = NiconicoAPIClient.TOKEN_PATTERN.search(line)
+            if m:
+                return m.groups()[0]
 
     def get_movie(self, mov_name):
         return self.retrieve(self._getflv(mov_name)['url'])
